@@ -7,6 +7,9 @@ InputCheck <- function (file)
     stop("Input file not exist.") 
   }
 	
+  #CZ: the original code has rownames, which is not compatible with output of the previous step
+  #and the idea of having a column without row header is weird anyway ...
+
   dat <- read.table (file, sep="\t", header=T);
   file.mat <- as.matrix (dat[,-1]);
   rownames(file.mat) <- dat[,1];
@@ -14,34 +17,11 @@ InputCheck <- function (file)
   #this needs to be handled properly, here or somewhere else	
 
   return (file.mat) 
-
-#   if (is.data.frame (file.mat))
-#   {
-#     return (file.mat)
-#   }
-#   else
-#   {
-#     stop ("Wrong Input File Format!")
-#   }
 }
+
 
 
 GetmKS <- function (x)
-{
-  x.1 <- x[which(!is.na(x))]
-
-  for (i in 1:length(x))
-  {
-    if(!is.na(x[i]))
-    {
-      x[i] <- x[i]-median(x.1)  
-    }
-  }
-  x
-}
-
-#CZ: the function above is inefficient
-GetmKS2 <- function (x)
 {
 	x = x - median(x, na.rm=T);
 	x
@@ -49,25 +29,32 @@ GetmKS2 <- function (x)
 
 
 
-rpkm.cutoff2 <- function (x)
+rpkm.filter <- function (x, cutoff)
 {
   x.bak <- x 
-  x[which(x.bak < 2)] <- 0
-  x[which(x.bak >= 2)] <- 1
+  x[which(x.bak < cutoff)] <- 0
+  x[which(x.bak >= cutoff)] <- 1
   x
 }
 
-#CZ: whether filtering should be done can be judged from whether gene.matrix is provided
 
-KSFilter  <- function (ks.matrix,  gene.matrix, sd.prop = 0.05)
+KSFilter  <- function (ks.matrix,  gene.matrix, propSD, fivebias, minRPKM, propEmks)
 {
-  if ( is.na(gene.matrix))
+  ### Remove duplicate genes ###
+  ks.matrix <- ks.matrix[!duplicated(rownames(ks.matrix)), ]
+  if ( is.null(dim(gene.matrix)))
   {
     mKS <- t(apply(ks.matrix, 1, GetmKS));
     return(mKS);
   }else
   {
+    ### Check if the RPKM cutoff is set by users ###
+    if (is.na(minRPKM))
+    {
+	stop('RPKM cutoff must be set\n')
+    }
     ### Check the order of genes and samples for two matrices ###
+    gene.matrix <- gene.matrix [!duplicated(rownames(gene.matrix)), ]
     gene.idx <- match(rownames(ks.matrix), rownames(gene.matrix))
     sample.idx <- match(colnames(ks.matrix), colnames(gene.matrix))
     
@@ -75,54 +62,77 @@ KSFilter  <- function (ks.matrix,  gene.matrix, sd.prop = 0.05)
     gene.matrix <- gene.matrix[gene.idx, sample.idx]
     
     ### Filter top sd.prop% genes by SD of KS statistics ###
-    NA.dis <- apply(ks.matrix, 1, function(x) length(which(is.na(x))))
-    #na.num <- 300
-	#CZ: this is not good, the line below is just a work around
-	na.num <- dim(ks.matrix)[2];
-
-    ### Plot the distribution of NA number of KS statistics and decide the number###
-    na.idx <- which(NA.dis < na.num)
+    if( !is.na(propSD))
+    {
+      if(propSD > 0 & propSD < 1)
+      {
+        ks.sd <- apply(ks.matrix, 1, function(x)  sd(x, na.rm=T))
+        sd.idx <-  order(ks.sd)[floor(length(ks.sd)*propSD) : length(ks.sd)]
+      }else
+      {
+        stop('Wrong propSD!\n')
+      }
+      
+    }
     
-    ks.matrix <- ks.matrix[na.idx, ]
-    gene.matrix<- gene.matrix[na.idx, ]
-    
-	#CZ: the following line can be simplified by using sd(x, na.rm=T)
-    ks.sd <- apply(ks.matrix, 1, function(x) {x <- x[which(!is.na(x))]; return(sd(x))})
-    sd.idx <-  order(ks.sd)[floor(length(ks.sd)*sd.prop) : length(ks.sd)]
     
     ### Filter genes that have strong 5' bias ###
-	
-	#CZ: the following line can be simplified by using median(x, na.rm=T)
-    ks.median <- apply(ks.matrix, 1, function(x) {x <- x[which(!is.na(x))]; return(median(x))})
-    meidan.cutoff <- 0
+    if(! is.na(fivebias))
+    {
+	    ks.median <- apply(ks.matrix, 1, function(x) median(x, na.rm=T))
+      ks.median.idx <- which(ks.median > 0)
+	  }
     
-    include.idx <- intersect(which(ks.median > 0), sd.idx)
-    ks.matrix.filtered <- ks.matrix[include.idx, ]
-    gene.matrix.filtered <- gene.matrix[include.idx, ]
     
+    if( !is.na(propSD) & is.na(fivebias))
+    {
+      ks.matrix.filtered <- ks.matrix[sd.idx, ]
+      gene.matrix.filtered <- gene.matrix[sd.idx, ]
+    }else if( is.na(propSD) & !is.na(fivebias))
+    {
+      ks.matrix.filtered <- ks.matrix[ks.median.idx, ]
+      gene.matrix.filtered <- gene.matrix[ks.median.idx, ]
+    }else if(!is.na(propSD) & !is.na(fivebias))
+    { 
+      ks.matrix.filtered <- ks.matrix[intersect(sd.idx, ks.median.idx), ]
+      gene.matrix.filtered <- gene.matrix[intersect(sd.idx, ks.median.idx), ]
+    }else
+    {
+      ks.matrix.filtered <- ks.matrix
+      gene.matrix.filtered <- gene.matrix
+    }
+	 
+	    
   
     ### Calculate the mKS matrix ###
     mKS <- t(apply(ks.matrix.filtered, 1, GetmKS))
     
     ### Filter mKS by gene expression values with cutoff 2 ###
-    rpkm.indicate <- apply(gene.matrix.filtered, 2, rpkm.cutoff2)
-    mKS.1 <- mKS * rpkm.indicate
+    if (!is.na(minRPKM))
+    {
+      rpkm.indicate <- apply(gene.matrix.filtered, 2, function(x) rpkm.filter(x, minRPKM))
+      mKS <- mKS * rpkm.indicate
+    }
     
-    ### Filter mKS by number of mks estimated across samples ### 
-    mks.est.num <- apply(mKS.1, 1, function(x) length(which(!is.na(x))))
-    include.idx.1 <- which( mks.est.num >= floor(dim(gene.matrix)[2] / 2))
     
-    mKS.2 <- mKS.1[include.idx.1,]
-  
-    return(mKS.2)
+    ### Filter mKS by number of mks estimated across samples ###
+    
+    if (!is.na(propEmks))
+    {
+      mks.est.num <- apply(mKS, 1, function(x) length(which(!is.na(x))))
+      include.idx.1 <- which( mks.est.num >= floor(dim(gene.matrix)[2] / 2))
+      mKS <- mKS[include.idx.1,]
+    }
+    
+    return(mKS)
   }
 }
 
 
-Cal.mRIN <- function (mKS, ks.matrix)
+Cal.mRIN <- function (mKS)
 {
-  mRIN <- apply(mKS, 2, function(x) -mean(x[which(!is.na(x))]))
-  names(mRIN) <- colnames(ks.matrix)
+  mRIN <- apply(mKS, 2, function(x) -mean(x, na.rm=TRUE))
+  #names(mRIN) <- colnames(ks.matrix)
   mRIN
 }
 
@@ -206,6 +216,10 @@ optionSpec = matrix(c(
     'expfile',   'x',    2, "character",
     'mrinfile',  'm',    1, "character",
     'gisfile',   'G',    1, "character",
+    'minRPKM',   'r',    2, "double",
+    'propSD',    's',    2, "double",
+    'propEmks',  'e',    2, "double",
+    'fivebias',  'b',    2, "charcter",
     'verbose',   'v',    2, "integer",
     'help'   ,   'h',    0, "logical"
     ), byrow=TRUE, ncol=4);
@@ -219,6 +233,10 @@ opt = getopt(optionSpec);
 #default parameters
 gene.exp.file=NA;
 verbose = 0;
+minRPKM = NA;
+propSD = NA;
+propEmks = NA;
+fivebias = NA;
 
 ks.file = opt$ksfile;
 mrin.file = opt$mrinfile;
@@ -228,6 +246,10 @@ gis.file = opt$gisfile;
 #set optional arguments
 if (!is.null(opt$expfile)) {gene.exp.file = opt$expfile}
 if (!is.null(opt$verbose)) {verbose = opt$verbose}
+if (!is.null(opt$minRPKM)) {minRPKM = opt$minRPKM}
+if (!is.null(opt$propSD)) {propSD = opt$propSD}
+if (!is.null(opt$propEmks)) {propEmks = opt$propEmks}
+if (!is.null(opt$fivebias)) {fivebias = opt$fivebias}
 
 if ( !is.null(opt$help) |is.null(opt$ksfile) | is.null(opt$mrinfile)| is.null(opt$gisfile))
 {
@@ -236,13 +258,17 @@ if ( !is.null(opt$help) |is.null(opt$ksfile) | is.null(opt$mrinfile)| is.null(op
         'calculate mRIN and GIS from KS matrix\n',
         'Usage: Rscript ', get_Rscript_filename(),"\n",
         '[required]\n',
-        ' -k, --ksfile     [string]: input file with KS matrix\n',
-        ' -m, --mrinfile   [string]: output file for mRIN\n',
-        ' -G, --gisfile    [string]: output file for GIS\n',
+        ' -k, --ksfile     Input file with KS matrix\n',
+        ' -m, --mrinfile   Output file for mRIN\n',
+        ' -G, --gisfile    Output file for GIS\n',
         '[options]\n',
-        ' -x, --expfile    [string]: input file with gene RPKM values\n',
-        ' -v, --verbose            : verbose mode\n',
-        ' -h, --help               : print usage\n'
+        ' -x, --expfile    Input file with gene RPKM values\n',
+        ' -r, --minRPKM    Gene RPKM value cutoff for ks statistics filtering\n',
+        ' -s, --propSD     Proportion of genes with smallest standard deviation of ks statistic for filtering, number between 0 and 1\n',
+        ' -e, --propEmks   Proportion of samples with mKS estimated for ks statistic filtering,number between 0 and 1\n',
+        ' -b, --fivebias   Remove genes with strong 5 bias\n',
+        ' -v, --verbose    Verbose mode\n',
+        ' -h, --help       Print usage\n'
     );
     q(status=1);
 }
@@ -260,11 +286,11 @@ if (!is.na(gene.exp.file))
 }
 
 ### Calculate mRIN for each sample ###
-if (verbose) {cat ('filter KS matrix ...\n');}
-mKS <- KSFilter (ks, gene.exp)
+if (verbose) {cat ('calculate mKS matrix ...\n');}
+mKS <- KSFilter (ks, gene.exp, propSD, fivebias, minRPKM, propEmks)
 
 if (verbose) {cat ('calculate sample mRINs ...\n');}
-mRIN <- Cal.mRIN (mKS,ks)
+mRIN <- Cal.mRIN (mKS)
 
 if (verbose) {cat ('estimate p-values ...\n');}
 mRIN.stat <- Calculate.pvalue (mRIN, verbose)
@@ -275,7 +301,9 @@ if (verbose) {cat ('calculate GIS ...\n');}
 GIS <- Cal.GIS (mRIN, mKS)
 
 if (verbose) {cat ('save output ...\n');}
-write.table(cbind(mRIN,Zscore, Pvalue), mrin.file, sep="\t", quote=FALSE, col.names=T, row.names=T)
-write.table(cbind(names(GIS), GIS), gis.file, col.names=c("gene.symbol","GIS"), quote=F, sep="\t", row.names=F)
+output.mRIN <- cbind(colnames(ks), mRIN, Zscore, Pvalue)
+colnames(output.mRIN) <- c("Sample", "mRIN", "Zcore", "Pvalue")
+write.table(output.mRIN, mrin.file, sep="\t", quote=FALSE, col.names=T, row.names=F)
+write.table(cbind(names(GIS), GIS), gis.file, col.names=c("Gene symbol","GIS"), quote=F, sep="\t", row.names=F)
 
 

@@ -76,7 +76,7 @@ my $fout;
 
 open ($fout, ">$outFile") || Carp::croak "cannot open file $outFile to write\n";
 
-print $fout join ("\t", "#name", "exon_len", @sampleNames), "\n";
+print $fout join ("\t", "name", @sampleNames), "\n";
 
 for (my $i = 0; $i < $n; $i++)
 {
