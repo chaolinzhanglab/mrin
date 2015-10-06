@@ -167,8 +167,9 @@ KS.stat <- function(par, x, alpha)
 
 Calculate.pvalue <- function(mRIN, verbose=F)
 {
-  alpha <- seq(-0.05, 0.05, 0.0005)
-  
+  alpha <- seq(-0.05, max(mRIN), 0.0005)
+  alpha.idx <- which(sapply(alpha,function(x) length(mRIN[mRIN>x]))>1)
+  alpha<- alpha[alpha.idx]
   mu <- alpha
   sigma <- alpha
   dis <- alpha
