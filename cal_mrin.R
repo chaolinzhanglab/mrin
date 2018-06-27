@@ -220,7 +220,7 @@ optionSpec = matrix(c(
     'minRPKM',   'r',    2, "double",
     'propSD',    's',    2, "double",
     'propEmks',  'e',    2, "double",
-    'fivebias',  'b',    2, "charcter",
+    'fivebias',  'b',    2, "character",
     'verbose',   'v',    2, "integer",
     'help'   ,   'h',    0, "logical"
     ), byrow=TRUE, ncol=4);
